@@ -3,16 +3,17 @@ const client = @import("client.zig");
 const schema = @import("schema.zig");
 const rand = std.rand;
 const time = std.time;
+const Action = schema.Action;
+const Pattern = schema.Pattern;
+const ROWS = schema.ROWS;
+const COLS = schema.COLS;
+const MAX_TICK_MS: u32 = 1000;
+const GAME_SPEEDS = [_]u8{ 1, 2, 5, 10, 20, 50, 100, 200 };
 
-pub const Action = schema.Action;
-pub const Pattern = schema.Pattern;
-pub const ROWS = schema.ROWS;
-pub const COLS = schema.COLS;
-pub const TICK_US: i64 = 100000; // 100k micro-seconds = 0.1 seconds
-
+var cell_values: [ROWS * COLS]u1 = undefined; // is there any point using u1 here?
 var rng = std.rand.DefaultPrng.init(0);
 var sdl_client: client.SdlClient = undefined;
-var cell_values: [ROWS * COLS]u1 = undefined; // TODO: check if u8 array with bitwise operators is faster
+var speed_index: u8 = 3;
 var paused = false;
 var quit = false;
 var tick: u64 = 0;
@@ -23,17 +24,15 @@ pub fn addClient(cl: client.SdlClient) !void {
 }
 
 pub fn run() !void {
-    try loadRandomSeed(42, 0.25);
     while (!quit) {
+        const t_frame_us = 1000 * MAX_TICK_MS / GAME_SPEEDS[speed_index];
         const tick_start = time.microTimestamp();
-        if (!paused) {
-            updateState();
-            processInputs();
-            publishState();
-        }
+        if (!paused) updateState();
+        processInputs();
+        publishState();
         dt = time.microTimestamp() - tick_start;
         // sleep for a moment to achieve desired frame time
-        const t_delay_us = if (dt < TICK_US) @as(u64, @intCast(TICK_US - dt)) else 0;
+        const t_delay_us = if (dt < t_frame_us) @as(u64, @intCast(t_frame_us - dt)) else 0;
         time.sleep(t_delay_us * time.ns_per_us);
         tick = tick +| 1; // we'll all be dead before this saturates lol
     }
@@ -79,14 +78,22 @@ fn updateState() void {
     }
 }
 
+// applies player inputs
 fn processInputs() void {
     const inputs = sdl_client.getRequests();
-    for (inputs) |i| {
-        switch (i) {
+
+    for (inputs) |req| {
+        switch (req.action) {
             Action.Quit => quit = true,
-            Action.Pause => paused = true,
-            Action.Unpause => paused = false,
-            Action.Insert => insert(sdl_client.active_pattern, rng.random().int(i32)), // TODO: fix this!
+            Action.Pause => paused = !paused,
+            Action.AdjustSpeed => {
+                const new_index = @as(i8, @intCast(speed_index)) + req.arguments.AdjustSpeed;
+                if (0 <= new_index and new_index < GAME_SPEEDS.len) speed_index = @as(u8, @intCast(new_index));
+            },
+            Action.Insert => {
+                const n = req.arguments.Insert.y * COLS + req.arguments.Insert.x;
+                insert(req.arguments.Insert.pattern, n);
+            },
             Action.None => {},
         }
     }

@@ -8,6 +8,7 @@ const Action = schema.Action;
 const Parameters = schema.Parameters;
 const Pattern = schema.Pattern;
 const REQUEST_BUFFER_LENGTH = 16;
+const SIDE_BAR_WIDTH = 200;
 
 pub const SdlClient = struct {
     window: *c.SDL_Window,
@@ -15,7 +16,10 @@ pub const SdlClient = struct {
     width: u16,
     height: u16,
     cell_size: u8,
+    cell_scale_factor: f32,
     active_pattern: Pattern = Pattern.cell,
+    mouse_x: f32 = 0.0,
+    mouse_y: f32 = 0.0,
 
     pub fn init(name: []const u8, cell_size: u8) !SdlClient {
         if (!c.SDL_Init(c.SDL_INIT_VIDEO)) {
@@ -23,7 +27,7 @@ pub const SdlClient = struct {
             return error.SDLInitFailed;
         }
 
-        const width = cell_size * schema.COLS;
+        const width = SIDE_BAR_WIDTH + cell_size * schema.COLS;
         const height = cell_size * schema.ROWS;
         _ = name; // TODO: find out how to pass this string to the SDL library functions
         const window = c.SDL_CreateWindow("", width, height, 0) orelse {
@@ -42,6 +46,7 @@ pub const SdlClient = struct {
             .width = schema.COLS,
             .height = schema.ROWS,
             .cell_size = cell_size,
+            .cell_scale_factor = 1.0 / @as(f32, @floatFromInt(cell_size)),
         };
     }
 
@@ -72,41 +77,61 @@ pub const SdlClient = struct {
         _ = c.SDL_RenderPresent(self.renderer);
     }
 
-    pub fn getRequests(self: *SdlClient) []Action {
-        var request_buffer: [REQUEST_BUFFER_LENGTH]Action = undefined;
+    pub fn getRequests(self: *SdlClient) []Request {
+        var request_buffer: [REQUEST_BUFFER_LENGTH]Request = undefined;
         var buff_index: u8 = 0;
         var e: c.SDL_Event = undefined;
         while (c.SDL_PollEvent(&e) and buff_index < REQUEST_BUFFER_LENGTH) {
-            const action = self.processEvent(e);
-            if (action == Action.None) continue;
-            request_buffer[buff_index] = action;
+            const req = self.processEvent(e);
+            if (req.action == Action.None) continue;
+            request_buffer[buff_index] = req;
             buff_index += 1;
         }
         return request_buffer[0..buff_index];
     }
 
-    fn processEvent(self: *SdlClient, e: c.SDL_Event) Action {
+    fn processEvent(self: *SdlClient, e: c.SDL_Event) Request {
         var action = Action.None;
+        var args: Parameters = undefined;
         if (e.type == c.SDL_EVENT_QUIT)
             action = Action.Quit
         else if (e.type == c.SDL_EVENT_KEY_DOWN) {
             switch (e.key.key) {
-                c.SDLK_ESCAPE => action = Action.Quit,
-                c.SDLK_SPACE => action = Action.Insert,
-                c.SDLK_1 => self.active_pattern = Pattern.cell,
-                c.SDLK_2 => self.active_pattern = Pattern.block,
-                c.SDLK_3 => self.active_pattern = Pattern.loaf,
+                c.SDLK_0 => self.active_pattern = Pattern.cell,
+                c.SDLK_1 => self.active_pattern = Pattern.block,
+                c.SDLK_2 => self.active_pattern = Pattern.loaf,
+                c.SDLK_3 => self.active_pattern = Pattern.tub,
                 c.SDLK_4 => self.active_pattern = Pattern.blinker,
                 c.SDLK_5 => self.active_pattern = Pattern.toad,
                 c.SDLK_6 => self.active_pattern = Pattern.pentadecathlon,
                 c.SDLK_7 => self.active_pattern = Pattern.glider,
                 c.SDLK_8 => self.active_pattern = Pattern.lwss,
                 c.SDLK_9 => self.active_pattern = Pattern.mwss,
+                c.SDLK_SPACE => action = Action.Pause,
+                c.SDLK_ESCAPE => action = Action.Quit,
+                c.SDLK_MINUS => {
+                    action = Action.AdjustSpeed;
+                    args = Parameters{ .AdjustSpeed = -1 };
+                },
+                c.SDLK_EQUALS => {
+                    action = Action.AdjustSpeed;
+                    args = Parameters{ .AdjustSpeed = 1 };
+                },
                 else => {},
             }
+        } else if (e.type == c.SDL_EVENT_MOUSE_MOTION) {
+            _ = c.SDL_GetMouseState(&self.mouse_x, &self.mouse_y);
+        } else if (e.type == c.SDL_EVENT_MOUSE_BUTTON_DOWN) {
+            action = Action.Insert;
+            args = Parameters{ .Insert = .{
+                .pattern = self.active_pattern,
+                .x = @intFromFloat(self.mouse_x * self.cell_scale_factor),
+                .y = @intFromFloat(self.mouse_y * self.cell_scale_factor),
+            } };
         }
+        // || e->type == SDL_MOUSEBUTTONDOWN || e->type == SDL_MOUSEBUTTONUP )
         //else if (e.type == c.SDL_MOUSEBUTTONDOWN)
 
-        return action;
+        return Request{ .action = action, .arguments = args };
     }
 };
