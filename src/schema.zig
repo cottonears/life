@@ -1,5 +1,5 @@
-pub const ROWS: i32 = 256;
-pub const COLS: i32 = 256;
+pub const ROWS: u32 = 256;
+pub const COLS: u32 = 400;
 
 pub const Request = struct {
     action: Action,
@@ -7,17 +7,19 @@ pub const Request = struct {
 };
 
 pub const Action = enum(u4) {
-    None, // 0
-    Pause, // 1
-    Quit, // 2
+    None,
+    Pause,
+    Quit,
+    Clear,
     AdjustSpeed,
-    Insert, // 3
+    Insert,
 };
 
 pub const Parameters = union(Action) {
     None: void,
     Pause: void,
     Quit: void,
+    Clear: void,
     AdjustSpeed: i4,
     Insert: struct { pattern: Pattern, x: i32, y: i32 },
 };

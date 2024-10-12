@@ -1,6 +1,4 @@
-const c = @cImport({
-    @cInclude("SDL3/SDL.h");
-});
+const c = @cImport(@cInclude("SDL3/SDL.h"));
 const std = @import("std");
 const schema = @import("schema.zig");
 const Request = schema.Request;
@@ -8,33 +6,33 @@ const Action = schema.Action;
 const Parameters = schema.Parameters;
 const Pattern = schema.Pattern;
 const REQUEST_BUFFER_LENGTH = 16;
-const SIDE_BAR_WIDTH = 200;
+const SIDE_BAR_WIDTH = 200.0;
+const SIDE_BAR_MARGIN = 10.0;
 
 pub const SdlClient = struct {
     window: *c.SDL_Window,
     renderer: *c.SDL_Renderer,
-    width: u16,
-    height: u16,
-    cell_size: u8,
+    width: u32,
+    height: u32,
+    cell_size: f32,
     cell_scale_factor: f32,
     active_pattern: Pattern = Pattern.cell,
     mouse_x: f32 = 0.0,
     mouse_y: f32 = 0.0,
 
-    pub fn init(name: []const u8, cell_size: u8) !SdlClient {
+    pub fn init(name: []const u8, cell_size: f32) !SdlClient {
+        const width = @as(u32, @intFromFloat(SIDE_BAR_WIDTH + cell_size * schema.COLS));
+        const height = @as(u32, @intFromFloat(cell_size * schema.ROWS));
+        const w: c_int = @intCast(width);
+        const h: c_int = @intCast(width);
         if (!c.SDL_Init(c.SDL_INIT_VIDEO)) {
             c.SDL_Log("Could not initialise SDL video subsytem: %s\n", c.SDL_GetError());
             return error.SDLInitFailed;
         }
-
-        const width = SIDE_BAR_WIDTH + cell_size * schema.COLS;
-        const height = cell_size * schema.ROWS;
-        _ = name; // TODO: find out how to pass this string to the SDL library functions
-        const window = c.SDL_CreateWindow("", width, height, 0) orelse {
+        const window = c.SDL_CreateWindow(name.ptr, w, h, 0) orelse {
             c.SDL_Log("Could not create SDL window: %s\n", c.SDL_GetError());
             return error.SDLInitFailed;
         };
-
         const renderer = c.SDL_CreateRenderer(window, null) orelse {
             c.SDL_Log("Could not create SDL renderer: %s\n", c.SDL_GetError());
             return error.SDLInitFailed;
@@ -43,10 +41,10 @@ pub const SdlClient = struct {
         return SdlClient{
             .window = window,
             .renderer = renderer,
-            .width = schema.COLS,
-            .height = schema.ROWS,
+            .width = width,
+            .height = height,
             .cell_size = cell_size,
-            .cell_scale_factor = 1.0 / @as(f32, @floatFromInt(cell_size)),
+            .cell_scale_factor = 1.0 / cell_size,
         };
     }
 
@@ -59,21 +57,35 @@ pub const SdlClient = struct {
         _ = c.SDL_SetRenderDrawColor(self.renderer, 0x00, 0x00, 0x00, 0xFF);
         _ = c.SDL_RenderClear(self.renderer);
         _ = c.SDL_RenderFillRect(self.renderer, null);
-        _ = c.SDL_SetRenderDrawColor(self.renderer, 0xC0, 0xE0, 0xFF, 0xFF);
+        _ = c.SDL_SetRenderDrawColor(self.renderer, 0x90, 0xA5, 0xC0, 0xFF);
 
         for (0..cell_values.len) |n| {
             if (cell_values[n] == 0) continue;
             var square: c.SDL_FRect = undefined;
-            const i = n / self.width;
-            const j = n % self.width;
-            square.x = @as(f32, @floatFromInt(j * self.cell_size));
-            square.y = @as(f32, @floatFromInt(i * self.cell_size));
-            square.w = @as(f32, @floatFromInt(self.cell_size));
-            square.h = @as(f32, @floatFromInt(self.cell_size));
+            const i = n / schema.COLS;
+            const j = n % schema.COLS;
+            square.x = @as(f32, @floatFromInt(j)) * self.cell_size;
+            square.y = @as(f32, @floatFromInt(i)) * self.cell_size;
+            square.w = self.cell_size;
+            square.h = self.cell_size;
             _ = c.SDL_RenderFillRect(self.renderer, &square);
         }
 
-        _ = paused and tick > 100; // TODO: make use of these
+        // TODO:  flesh this out
+        const sidebar_x = @as(f32, @floatFromInt(self.width)) - SIDE_BAR_WIDTH;
+        var play_light: c.SDL_FRect = undefined;
+        play_light.x = sidebar_x + SIDE_BAR_MARGIN;
+        play_light.y = SIDE_BAR_MARGIN;
+        play_light.w = SIDE_BAR_WIDTH - 2.0 * SIDE_BAR_MARGIN;
+        play_light.h = SIDE_BAR_WIDTH - 2.0 * SIDE_BAR_MARGIN;
+        if (paused) {
+            _ = c.SDL_SetRenderDrawColor(self.renderer, 0xA0, 0x20, 0x20, 0xFF);
+        } else {
+            _ = c.SDL_SetRenderDrawColor(self.renderer, 0x20, 0xA0, 0x20, 0xFF);
+        }
+        _ = c.SDL_RenderFillRect(self.renderer, &play_light);
+
+        _ = tick > 100; // TODO: make use of this!
         _ = c.SDL_RenderPresent(self.renderer);
     }
 
@@ -109,6 +121,7 @@ pub const SdlClient = struct {
                 c.SDLK_9 => self.active_pattern = Pattern.mwss,
                 c.SDLK_SPACE => action = Action.Pause,
                 c.SDLK_ESCAPE => action = Action.Quit,
+                c.SDLK_BACKSPACE => action = Action.Clear,
                 c.SDLK_MINUS => {
                     action = Action.AdjustSpeed;
                     args = Parameters{ .AdjustSpeed = -1 };
@@ -122,12 +135,15 @@ pub const SdlClient = struct {
         } else if (e.type == c.SDL_EVENT_MOUSE_MOTION) {
             _ = c.SDL_GetMouseState(&self.mouse_x, &self.mouse_y);
         } else if (e.type == c.SDL_EVENT_MOUSE_BUTTON_DOWN) {
-            action = Action.Insert;
-            args = Parameters{ .Insert = .{
-                .pattern = self.active_pattern,
-                .x = @intFromFloat(self.mouse_x * self.cell_scale_factor),
-                .y = @intFromFloat(self.mouse_y * self.cell_scale_factor),
-            } };
+            const sidebar_x = @as(f32, @floatFromInt(self.width)) - SIDE_BAR_WIDTH;
+            if (self.mouse_x < sidebar_x) { // TOOD: fix this!!
+                action = Action.Insert;
+                args = Parameters{ .Insert = .{
+                    .pattern = self.active_pattern,
+                    .x = @intFromFloat(self.mouse_x * self.cell_scale_factor),
+                    .y = @intFromFloat(self.mouse_y * self.cell_scale_factor),
+                } };
+            }
         }
         // || e->type == SDL_MOUSEBUTTONDOWN || e->type == SDL_MOUSEBUTTONUP )
         //else if (e.type == c.SDL_MOUSEBUTTONDOWN)

@@ -3,10 +3,7 @@ const game = @import("game.zig");
 const client = @import("client.zig");
 
 pub fn main() !void {
-    // TODO: load some config file with basic settings
-    // cell sizes
-    // log-file location
-    // add command line arg for initial state
+    // TODO: add command line args for hard-coded params in this module
     var sdlc = try client.SdlClient.init("Life", 6);
     defer sdlc.deinit();
 
@@ -14,7 +11,7 @@ pub fn main() !void {
         std.debug.print("Error occurred when initialising game: {}\n", .{ie});
         return;
     };
-    game.run() catch |re| {
+    game.run(0.3, 42) catch |re| {
         std.debug.print("Error occured while running game: {}\n", .{re});
         return;
     };
