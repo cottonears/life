@@ -13,7 +13,7 @@ pub fn build(b: *std.Build) !void {
     });
 
     if (target.query.isNativeOs() and target.result.os.tag == .linux) {
-        exe.linkSystemLibrary("SDL2");
+        exe.linkSystemLibrary("SDL3");
         exe.linkLibC();
     } else {
         return error.OsNotSupported;
