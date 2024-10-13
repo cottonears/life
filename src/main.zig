@@ -11,7 +11,7 @@ pub fn main() !void {
         std.debug.print("Error occurred when initialising game: {}\n", .{ie});
         return;
     };
-    game.run(0.3, 42) catch |re| {
+    game.run(0.21, 43712) catch |re| {
         std.debug.print("Error occured while running game: {}\n", .{re});
         return;
     };
