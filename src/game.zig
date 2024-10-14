@@ -8,8 +8,8 @@ const Action = schema.Action;
 const Pattern = schema.Pattern;
 const ROWS = schema.ROWS;
 const COLS = schema.COLS;
-const FRAME_TIME_MS: i32 = 5;
-const STATE_TIMES_MS = [_]u16{ 1000, 500, 200, 100, 50, 20, 10, 5 };
+const FRAME_TIME_MS: i32 = 10;
+const STATE_TIMES_MS = [_]u16{ 1000, 500, 200, 100, 50, 20, 10 };
 
 var cell_values: [ROWS * COLS]u1 = undefined; // is there any point using u1 here?
 var rng = std.rand.DefaultPrng.init(0);

@@ -1,12 +1,12 @@
-pub const ROWS: u32 = 300;
-pub const COLS: u32 = 512;
+pub const ROWS: u32 = 400;
+pub const COLS: u32 = 640;
 
 pub const Request = struct {
     action: Action,
     arguments: Parameters,
 };
 
-pub const Action = enum(u4) {
+pub const Action = enum(u8) {
     None,
     Pause,
     Quit,
