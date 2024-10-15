@@ -1,5 +1,5 @@
-pub const ROWS: u32 = 400;
-pub const COLS: u32 = 640;
+pub const ROWS: u32 = 800;
+pub const COLS: u32 = 1600;
 
 pub const Request = struct {
     action: Action,

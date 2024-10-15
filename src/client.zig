@@ -4,30 +4,29 @@ const c = @cImport({
 });
 const std = @import("std");
 const schema = @import("schema.zig");
+const math = std.math;
 const Request = schema.Request;
 const Action = schema.Action;
 const Parameters = schema.Parameters;
 const Pattern = schema.Pattern;
-const REQUEST_BUFFER_LENGTH = 8;
-const HUD_HEIGHT = 100.0;
-const HUD_MARGIN = 5.0;
+const pattern_offsets = schema.pattern_offsets;
 const HUD_BAR_RGBA = [_]u8{ 0x20, 0x21, 0x20, 0xFF };
 const DEFAULT_ACTIVE_RGBA = [_]u8{ 0xE0, 0xC0, 0x00, 0xFF };
 const DEFAULT_INACTIVE_RGBA = [_]u8{ 0x40, 0x40, 0x40, 0xA0 };
+const PLAY_ACTIVE_RGBA = [_]u8{ 0x20, 0xFF, 0x20, 0xFF };
+const PAUSE_ACTIVE_RGBA = [_]u8{ 0xFF, 0x20, 0x20, 0xFF };
 const CELL_ALIVE_RGBA = [_]u8{ 0xA0, 0xB5, 0xD0, 0xFF };
 const CELL_DEAD_RGBA = [_]u8{ 0x05, 0x05, 0x05, 0xFF };
+const REQUEST_BUFFER_LENGTH = 8;
+const HUD_HEIGHT = 100.0;
+const HUD_MARGIN = 5.0;
+const button_size = HUD_HEIGHT - 2.0 * HUD_MARGIN;
 
 const Button = struct {
     label: []const u8,
     icon_offsets: []const [2]i8 = &.{},
-    active: bool = false,
     active_rgba: [4]u8 = DEFAULT_ACTIVE_RGBA,
     inactive_rgba: [4]u8 = DEFAULT_INACTIVE_RGBA,
-    x_align_right: bool = false,
-
-    pub fn getRgba(self: *const Button) [4]u8 {
-        return if (self.active) self.active_rgba else self.inactive_rgba;
-    }
 };
 
 pub const SdlClient = struct {
@@ -42,7 +41,28 @@ pub const SdlClient = struct {
     active_pattern: Pattern = Pattern.cell,
     mouse_x: f32 = 0.0,
     mouse_y: f32 = 0.0,
-    buttons: [12]Button = undefined,
+    pattern_buttons: [10]Button = [10]Button{
+        Button{ .label = "block", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.block)] },
+        Button{ .label = "toad", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.toad)] },
+        Button{ .label = "pulsar", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.pulsar)] },
+        Button{ .label = "monogram", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.monogram)] },
+        Button{ .label = "pentadecathlon", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.pentadecathlon)] },
+        Button{ .label = "glider", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.glider)] },
+        Button{ .label = "mid-weight spaceship", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.mwss)] },
+        Button{ .label = "weekender", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.weekender)] },
+        Button{ .label = "unknown", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.unknown)] },
+        Button{ .label = "cell", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.cell)] },
+    },
+    pause_button: Button = Button{
+        .label = "pause",
+        .active_rgba = PAUSE_ACTIVE_RGBA,
+        .icon_offsets = schema.pattern_offsets[@intFromEnum(Pattern.block)], // TODO: fix this!
+    },
+    play_button: Button = Button{
+        .label = "play",
+        .active_rgba = PLAY_ACTIVE_RGBA,
+        .icon_offsets = schema.pattern_offsets[@intFromEnum(Pattern.toad)], // TODO: fix this!
+    },
 
     pub fn init(name: []const u8, cell_size: f32) !SdlClient {
         const width = cell_size * schema.COLS;
@@ -63,61 +83,6 @@ pub const SdlClient = struct {
             return error.SDLInitFailed;
         };
 
-        const buttons = [12]Button{
-            Button{
-                .label = "block",
-                .icon_offsets = schema.pattern_offsets[@intFromEnum(Pattern.block)],
-            },
-            Button{
-                .label = "toad",
-                .icon_offsets = schema.pattern_offsets[@intFromEnum(Pattern.toad)],
-            },
-            Button{
-                .label = "pulsar",
-                .icon_offsets = schema.pattern_offsets[@intFromEnum(Pattern.pulsar)],
-            },
-            Button{
-                .label = "monogram",
-                .icon_offsets = schema.pattern_offsets[@intFromEnum(Pattern.monogram)],
-            },
-            Button{
-                .label = "pentadecathlon",
-                .icon_offsets = schema.pattern_offsets[@intFromEnum(Pattern.pentadecathlon)],
-            },
-            Button{
-                .label = "glider",
-                .icon_offsets = schema.pattern_offsets[@intFromEnum(Pattern.glider)],
-            },
-            Button{
-                .label = "mw-ship",
-                .icon_offsets = schema.pattern_offsets[@intFromEnum(Pattern.mwss)],
-            },
-            Button{
-                .label = "weekender",
-                .icon_offsets = schema.pattern_offsets[@intFromEnum(Pattern.weekender)],
-            },
-            Button{
-                .label = "unknown",
-                .icon_offsets = schema.pattern_offsets[@intFromEnum(Pattern.unknown)],
-            },
-            Button{
-                .label = "cell",
-                .icon_offsets = schema.pattern_offsets[@intFromEnum(Pattern.cell)],
-            },
-            Button{
-                .label = "run",
-                .active_rgba = [_]u8{ 0x20, 0xFF, 0x20, 0xFF },
-                .x_align_right = true,
-                .icon_offsets = schema.pattern_offsets[@intFromEnum(Pattern.toad)], // TODO: fix this!
-            },
-            Button{
-                .label = "pause",
-                .active_rgba = [_]u8{ 0xFF, 0x20, 0x20, 0xFF },
-                .x_align_right = true,
-                .icon_offsets = schema.pattern_offsets[@intFromEnum(Pattern.block)], // TODO: fix this!
-            },
-        };
-
         return SdlClient{
             .window = window,
             .renderer = renderer,
@@ -127,7 +92,6 @@ pub const SdlClient = struct {
             .height_u32 = height_u32,
             .cell_size = cell_size,
             .cell_scale_factor = 1.0 / cell_size,
-            .buttons = buttons,
         };
     }
 
@@ -136,67 +100,38 @@ pub const SdlClient = struct {
         c.SDL_Quit();
     }
 
-    pub fn drawState(self: *SdlClient, cell_values: []const u1, paused: bool, tick: u64) void {
+    pub fn drawState(self: *SdlClient, cell_values: []const u8, paused: bool, tick: u64) void {
+        // render background + cells
         self.setRenderRgba(CELL_DEAD_RGBA);
         _ = c.SDL_RenderClear(self.renderer);
         _ = c.SDL_RenderFillRect(self.renderer, null);
         self.setRenderRgba(CELL_ALIVE_RGBA);
-
         for (0..cell_values.len) |n| {
             if (cell_values[n] == 0) continue;
             const x = @as(f32, @floatFromInt(n % schema.COLS)) * self.cell_size;
             const y = @as(f32, @floatFromInt(n / schema.COLS)) * self.cell_size;
             self.renderRect(x, y, self.cell_size, self.cell_size);
         }
-        self.updateButtons(paused);
-        self.renderHud(tick);
-        _ = c.SDL_RenderPresent(self.renderer);
-    }
-
-    fn updateButtons(self: *SdlClient, paused: bool) void {
-        for (0..10) |i| {
-            self.buttons[i].active = (i + 1) % 10 == @intFromEnum(self.active_pattern);
-        }
-        self.buttons[11].active = paused;
-        self.buttons[10].active = !paused;
-    }
-
-    fn renderHud(self: *SdlClient, tick: u64) void {
-        const button_size = HUD_HEIGHT - 2.0 * HUD_MARGIN;
+        // render HUD
         const button_y = self.height - HUD_HEIGHT + HUD_MARGIN;
         self.setRenderRgba(HUD_BAR_RGBA);
         self.renderRect(0.0, button_y - HUD_MARGIN, self.width, HUD_HEIGHT);
-        // render left-aligned buttons
         var current_x: f32 = HUD_MARGIN;
-        for (self.buttons) |b| {
-            if (b.x_align_right) continue;
-            self.setRenderRgba(b.getRgba());
+        for (self.pattern_buttons, 0..) |b, i| {
+            const b_active = (i + 1) % 10 == @intFromEnum(self.active_pattern);
+            const rgba = if (b_active) b.active_rgba else b.inactive_rgba;
+            self.setRenderRgba(rgba);
             self.renderRect(current_x, button_y, button_size, button_size);
             current_x += button_size + HUD_MARGIN;
         }
-        // render right-aligned buttons
-        current_x = self.width - HUD_MARGIN;
-        for (self.buttons) |b| {
-            if (!b.x_align_right) continue;
-            self.setRenderRgba(b.getRgba());
-            self.renderRect(current_x, button_y, -button_size, button_size);
-            current_x -= button_size + HUD_MARGIN;
-        }
+        const pause_rgba = if (paused) self.play_button.active_rgba else self.play_button.inactive_rgba;
+        self.setRenderRgba(pause_rgba);
+        self.renderRect(self.width - 2.0 * (button_size + HUD_MARGIN), button_y, button_size, button_size);
+        const play_rgba = if (!paused) self.play_button.active_rgba else self.play_button.inactive_rgba;
+        self.setRenderRgba(play_rgba);
+        self.renderRect(self.width - (button_size + HUD_MARGIN), button_y, button_size, button_size);
         _ = tick + 1; // TODO: make use of this!;
-    }
-
-    fn setRenderRgba(self: *SdlClient, rgba: [4]u8) void {
-        // TODO: will it speed things up to check if the rgba one matches a stored one with std.mem.eqlBytes?
-        _ = c.SDL_SetRenderDrawColor(self.renderer, rgba[0], rgba[1], rgba[2], rgba[3]);
-    }
-
-    fn renderRect(self: *SdlClient, x: f32, y: f32, w: f32, h: f32) void {
-        var rect: c.SDL_FRect = undefined;
-        rect.x = x;
-        rect.y = y;
-        rect.w = w;
-        rect.h = h;
-        _ = c.SDL_RenderFillRect(self.renderer, &rect);
+        _ = c.SDL_RenderPresent(self.renderer);
     }
 
     pub fn getRequests(self: *SdlClient) []Request {
@@ -246,9 +181,9 @@ pub const SdlClient = struct {
             _ = c.SDL_GetMouseState(&self.mouse_x, &self.mouse_y);
         } else if (e.type == c.SDL_EVENT_MOUSE_BUTTON_DOWN) {
             const hud_y = self.height - HUD_HEIGHT;
-            if (self.mouse_y < hud_y) { // TOOD: fix this!!
-                action = Action.Insert;
+            if (self.mouse_y < hud_y) {
                 // TODO: centre the pattern on mouse and find the best place to put it!
+                action = Action.Insert;
                 args = Parameters{ .Insert = .{
                     .pattern = self.active_pattern,
                     .x = @intFromFloat(self.mouse_x * self.cell_scale_factor),
@@ -258,5 +193,45 @@ pub const SdlClient = struct {
         }
 
         return Request{ .action = action, .arguments = args };
+    }
+
+    // fn renderButton(self: *SdlClient, x: f32, y: f32, b: Button, active: bool) void {
+    //     const rgba = if (active) b.active_rgba else b.active_rgba;
+    //     self.setRenderRgba(rgba);
+    //     self.renderRect(x, y, button_size, button_size);
+    //     var min_x: f32 = math.floatMax(f32);
+    //     var max_x: f32 = math.floatMin(f32);
+    //     var min_y: f32 = math.floatMax(f32);
+    //     var max_y: f32 = math.floatMin(f32);
+    //     for (b.icon_offsets) |offsets| {
+    //         const pixel_x: f32 = @floatFromInt(offsets[0]);
+    //         const pixel_y: f32 = @floatFromInt(offsets[1]);
+    //         min_x = @min(min_x, pixel_x);
+    //         max_x = @max(max_x, pixel_x);
+    //         min_y = @min(min_y, pixel_y);
+    //         max_y = @max(max_y, pixel_y);
+    //     }
+    //     const icon_size = @max(max_y - min_y, max_x - min_x);
+    //     const scale_factor = 0.8 * button_size / icon_size;
+    //     const icon_rgba = if (!active) b.active_rgba else b.active_rgba;
+    //     self.setRenderRgba(icon_rgba);
+    //     for (b.icon_offsets) |offsets| {
+    //         const b_x = 0.1 * button_size + scale_factor * @as(f32, @floatFromInt(offsets[0]));
+    //         const b_y = 0.1 * button_size + scale_factor * @as(f32, @floatFromInt(offsets[1]));
+    //         self.renderRect(b_x, b_y, scale_factor, scale_factor);
+    //     }
+    // }
+
+    fn setRenderRgba(self: *SdlClient, rgba: [4]u8) void {
+        _ = c.SDL_SetRenderDrawColor(self.renderer, rgba[0], rgba[1], rgba[2], rgba[3]);
+    }
+
+    fn renderRect(self: *SdlClient, x: f32, y: f32, w: f32, h: f32) void {
+        var rect: c.SDL_FRect = undefined;
+        rect.x = x;
+        rect.y = y;
+        rect.w = w;
+        rect.h = h;
+        _ = c.SDL_RenderFillRect(self.renderer, &rect);
     }
 };

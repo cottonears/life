@@ -6,48 +6,57 @@ const rand = std.rand;
 const time = std.time;
 const Action = schema.Action;
 const Pattern = schema.Pattern;
+const K = 1000;
 const ROWS = schema.ROWS;
 const COLS = schema.COLS;
-const FRAME_TIME_MS: i32 = 10;
-const STATE_TIMES_MS = [_]u16{ 1000, 500, 200, 100, 50, 20, 10 };
+const FRAME_TIME_US: i32 = 10 * K;
+const STATE_TIME_US = [_]u32{ 1000 * K, 500 * K, 200 * K, 100 * K, 50 * K, 20 * K, 10 * K };
 
-var cell_values: [ROWS * COLS]u1 = undefined; // is there any point using u1 here?
+var cell_values: [ROWS * COLS]u8 = undefined;
 var rng = std.rand.DefaultPrng.init(0);
 var sdl_client: client.SdlClient = undefined;
-var speed_index: u8 = 3;
+var speed_index: u8 = 6;
 var paused = false;
 var quit = false;
 var state_tick: u64 = 0;
-var dt: i64 = 0;
+var dt_us: i64 = 0;
+var dt_sum: i64 = 0;
+var frames: i64 = 0;
+// NOTE: pre-computing neighbourhoods improved performance and increased memory usage
+//var cell_neighbours: [ROWS * COLS][8]u32 = undefined;
 
 pub fn addClient(cl: client.SdlClient) !void {
     sdl_client = cl;
 }
 
 pub fn run(density: f32, seed: u64) !void {
+    resetCells(density, seed);
     // state is updated depending on the current game speed
     // inputs + rendering are performed every frame (to make more responsive)
-    resetCells(density, seed);
-    var tick_start = time.milliTimestamp();
+    var tick_start = time.microTimestamp();
     while (!quit) {
-        const frame_start = time.milliTimestamp();
-        if (!paused and frame_start > tick_start + STATE_TIMES_MS[speed_index]) {
+        const frame_start = time.microTimestamp();
+        if (!paused and frame_start > tick_start + STATE_TIME_US[speed_index]) {
             updateState();
-            tick_start = time.milliTimestamp();
+            tick_start = time.microTimestamp();
             state_tick = state_tick +| 1;
         }
         processRequests();
         publishState();
-        dt = time.milliTimestamp() - frame_start;
-        const t_delay_ms = if (dt < FRAME_TIME_MS) @as(u64, @intCast(FRAME_TIME_MS - dt)) else 0;
-        time.sleep(t_delay_ms * time.ns_per_ms);
+        dt_us = time.microTimestamp() - frame_start;
+        const t_delay_us = if (dt_us < FRAME_TIME_US) @as(u64, @intCast(FRAME_TIME_US - dt_us)) else 0;
+        time.sleep(t_delay_us * time.ns_per_us);
+        dt_sum += dt_us;
+        frames += 1;
     }
+    const dt_avg: f32 = @as(f32, @floatFromInt(dt_sum)) / @as(f32, @floatFromInt(frames));
+    std.debug.print("rendered {} frames; dt_avg = {:.2} us\n", .{ frames, dt_avg });
 }
 
 // can be used to clear all cells (when density = 0) or load a random seed
 pub fn resetCells(density: f32, seed: u64) void {
     if (density == 0.0) {
-        cell_values = [_]u1{0} ** (ROWS * COLS);
+        cell_values = [_]u8{0} ** (ROWS * COLS);
         return;
     }
     const density_factor: f32 = 1.0 / @as(f32, @floatFromInt(math.maxInt(u64)));
@@ -61,10 +70,11 @@ pub fn resetCells(density: f32, seed: u64) void {
 
 // applies environmental rules
 fn updateState() void {
-    var neighbourhood_sums: [ROWS * COLS]u3 = undefined;
+    var neighbourhood_sums: [ROWS * COLS]u8 = undefined;
     for (0..ROWS * COLS) |n| {
         const adj_indices = getAdjacentIndices(@intCast(n));
-        const neighbourhood_vals = @Vector(8, u3){
+        //const adj_indices = getAdjacentIndices(@intCast(n));
+        const neighbourhood_vals = @Vector(8, u8){
             cell_values[adj_indices[0]],
             cell_values[adj_indices[1]],
             cell_values[adj_indices[2]],
@@ -88,9 +98,8 @@ fn updateState() void {
 
 // applies player inputs
 fn processRequests() void {
-    const inputs = sdl_client.getRequests();
-
-    for (inputs) |req| {
+    const reqs = sdl_client.getRequests();
+    for (reqs) |req| {
         switch (req.action) {
             Action.Quit => quit = true,
             Action.Pause => paused = !paused,
@@ -101,7 +110,7 @@ fn processRequests() void {
             },
             Action.AdjustSpeed => {
                 const new_index = @as(i8, @intCast(speed_index)) + req.arguments.AdjustSpeed;
-                if (0 <= new_index and new_index < STATE_TIMES_MS.len) speed_index = @as(u8, @intCast(new_index));
+                if (0 <= new_index and new_index < STATE_TIME_US.len) speed_index = @as(u8, @intCast(new_index));
             },
             Action.Insert => {
                 const n = req.arguments.Insert.y * COLS + req.arguments.Insert.x;
@@ -122,13 +131,19 @@ fn insert(p: Pattern, n: i32) void {
 }
 
 fn getAdjacentIndices(n: i32) [8]u32 {
-    const row_0 = [3]u32{ wIndex(n, -1, -1), wIndex(n, -1, 0), wIndex(n, -1, 1) };
-    const row_1 = [2]u32{ wIndex(n, 0, -1), wIndex(n, 0, 1) };
-    const row_2 = [3]u32{ wIndex(n, 1, -1), wIndex(n, 1, 0), wIndex(n, 1, 1) };
-    return row_0 ++ row_1 ++ row_2;
+    return [_]u32{
+        wIndex(n, -1, -1),
+        wIndex(n, -1, 0),
+        wIndex(n, -1, 1),
+        wIndex(n, 0, -1),
+        wIndex(n, 0, 1),
+        wIndex(n, 1, -1),
+        wIndex(n, 1, 0),
+        wIndex(n, 1, 1),
+    };
 }
 
-fn setCellVals(n: i32, offsets: []const [2]i8, val: u1) void {
+fn setCellVals(n: i32, offsets: []const [2]i8, val: u8) void {
     for (offsets) |offset| {
         const cell_index = wIndex(n, offset[0], offset[1]);
         cell_values[cell_index] = val;

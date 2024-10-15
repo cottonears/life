@@ -4,7 +4,7 @@ const client = @import("client.zig");
 
 pub fn main() !void {
     // TODO: add command line args for hard-coded params in this module
-    var sdlc = try client.SdlClient.init("Life", 4);
+    var sdlc = try client.SdlClient.init("Life", 2);
     defer sdlc.deinit();
 
     game.addClient(sdlc) catch |ie| {
