@@ -1,6 +1,3 @@
-pub const ROWS: u32 = 800;
-pub const COLS: u32 = 1600;
-
 pub const Request = struct {
     action: Action,
     arguments: Parameters,
@@ -23,6 +20,10 @@ pub const Parameters = union(Action) {
     AdjustSpeed: i4,
     Insert: struct { pattern: Pattern, x: i32, y: i32 },
 };
+
+// TODO: change pattern into an int and move all the below into main.zig (parse patterns from json!)
+pub const ROWS: u32 = 400;
+pub const COLS: u32 = 720;
 
 pub const Pattern = enum(u8) {
     cell, // 0

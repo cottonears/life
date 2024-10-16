@@ -119,17 +119,12 @@ pub const SdlClient = struct {
         var current_x: f32 = HUD_MARGIN;
         for (self.pattern_buttons, 0..) |b, i| {
             const b_active = (i + 1) % 10 == @intFromEnum(self.active_pattern);
-            const rgba = if (b_active) b.active_rgba else b.inactive_rgba;
-            self.setRenderRgba(rgba);
-            self.renderRect(current_x, button_y, button_size, button_size);
+            self.renderButton(current_x, button_y, b, b_active);
             current_x += button_size + HUD_MARGIN;
         }
-        const pause_rgba = if (paused) self.play_button.active_rgba else self.play_button.inactive_rgba;
-        self.setRenderRgba(pause_rgba);
-        self.renderRect(self.width - 2.0 * (button_size + HUD_MARGIN), button_y, button_size, button_size);
-        const play_rgba = if (!paused) self.play_button.active_rgba else self.play_button.inactive_rgba;
-        self.setRenderRgba(play_rgba);
-        self.renderRect(self.width - (button_size + HUD_MARGIN), button_y, button_size, button_size);
+
+        self.renderButton(self.width - 2.0 * (button_size + HUD_MARGIN), button_y, self.pause_button, paused);
+        self.renderButton(self.width - (button_size + HUD_MARGIN), button_y, self.play_button, !paused);
         _ = tick + 1; // TODO: make use of this!;
         _ = c.SDL_RenderPresent(self.renderer);
     }
@@ -195,32 +190,37 @@ pub const SdlClient = struct {
         return Request{ .action = action, .arguments = args };
     }
 
-    // fn renderButton(self: *SdlClient, x: f32, y: f32, b: Button, active: bool) void {
-    //     const rgba = if (active) b.active_rgba else b.active_rgba;
-    //     self.setRenderRgba(rgba);
-    //     self.renderRect(x, y, button_size, button_size);
-    //     var min_x: f32 = math.floatMax(f32);
-    //     var max_x: f32 = math.floatMin(f32);
-    //     var min_y: f32 = math.floatMax(f32);
-    //     var max_y: f32 = math.floatMin(f32);
-    //     for (b.icon_offsets) |offsets| {
-    //         const pixel_x: f32 = @floatFromInt(offsets[0]);
-    //         const pixel_y: f32 = @floatFromInt(offsets[1]);
-    //         min_x = @min(min_x, pixel_x);
-    //         max_x = @max(max_x, pixel_x);
-    //         min_y = @min(min_y, pixel_y);
-    //         max_y = @max(max_y, pixel_y);
-    //     }
-    //     const icon_size = @max(max_y - min_y, max_x - min_x);
-    //     const scale_factor = 0.8 * button_size / icon_size;
-    //     const icon_rgba = if (!active) b.active_rgba else b.active_rgba;
-    //     self.setRenderRgba(icon_rgba);
-    //     for (b.icon_offsets) |offsets| {
-    //         const b_x = 0.1 * button_size + scale_factor * @as(f32, @floatFromInt(offsets[0]));
-    //         const b_y = 0.1 * button_size + scale_factor * @as(f32, @floatFromInt(offsets[1]));
-    //         self.renderRect(b_x, b_y, scale_factor, scale_factor);
-    //     }
-    // }
+    fn renderButton(self: *SdlClient, x: f32, y: f32, b: Button, active: bool) void {
+        const rgba = if (active) b.active_rgba else b.inactive_rgba;
+        self.setRenderRgba(rgba);
+        self.renderRect(x, y, button_size, button_size);
+        var min_x: f32 = math.floatMax(f32);
+        var max_x: f32 = math.floatMin(f32);
+        var min_y: f32 = math.floatMax(f32);
+        var max_y: f32 = math.floatMin(f32);
+        for (b.icon_offsets) |offsets| {
+            const pixel_x: f32 = @floatFromInt(offsets[1]);
+            const pixel_y: f32 = @floatFromInt(offsets[0]);
+            min_x = @min(min_x, pixel_x);
+            max_x = @max(max_x, pixel_x);
+            min_y = @min(min_y, pixel_y);
+            max_y = @max(max_y, pixel_y);
+        }
+        const icon_width = 1.0 + max_x - min_x;
+        const icon_height = 1.0 + max_y - min_y;
+        const icon_size = @max(icon_width, icon_height);
+        const scale_factor = button_size / (2 + icon_size);
+        const x_offset = x + 0.1 * button_size + 0.5 * scale_factor * (icon_size - icon_width);
+        const y_offset = y + 0.1 * button_size + 0.5 * scale_factor * (icon_size - icon_height);
+
+        const icon_rgba = [_]u8{ 0, 0, 0, 255 };
+        self.setRenderRgba(icon_rgba);
+        for (b.icon_offsets) |offsets| {
+            const i_x = x_offset + scale_factor * @as(f32, @floatFromInt(offsets[1]));
+            const i_y = y_offset + scale_factor * @as(f32, @floatFromInt(offsets[0]));
+            self.renderRect(i_x, i_y, scale_factor, scale_factor);
+        }
+    }
 
     fn setRenderRgba(self: *SdlClient, rgba: [4]u8) void {
         _ = c.SDL_SetRenderDrawColor(self.renderer, rgba[0], rgba[1], rgba[2], rgba[3]);
