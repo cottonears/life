@@ -1,50 +1,78 @@
 const std = @import("std");
-const client = @import("client.zig");
 const schema = @import("schema.zig");
 const math = std.math;
 const rand = std.rand;
 const time = std.time;
-const Action = schema.Action;
-const Pattern = schema.Pattern;
-const K = 1000;
-const ROWS = schema.ROWS;
-const COLS = schema.COLS;
-const FRAME_TIME_US: i32 = 10 * K;
-const STATE_TIME_US = [_]u32{ 1000 * K, 500 * K, 200 * K, 100 * K, 50 * K, 20 * K, 10 * K };
 
-var cell_values: [ROWS * COLS]u8 = undefined;
-var rng = std.rand.DefaultPrng.init(0);
-var sdl_client: client.SdlClient = undefined;
-var speed_index: u8 = 6;
-var paused = false;
-var quit = false;
-var state_tick: u64 = 0;
+pub const Request = struct {
+    action: Action,
+    arguments: Parameters,
+};
+
+pub const Subscriber = struct {
+    ptr: *anyopaque,
+    frequency: u8 = 1,
+    state_handler: *const fn (ptr: *anyopaque, t: u64) void,
+};
+
+pub const Action = enum(u8) {
+    None,
+    Pause,
+    Quit,
+    AdjustSpeed,
+    LoadSeed,
+    Insert,
+};
+
+pub const Parameters = union(Action) {
+    None: void,
+    Pause: void,
+    Quit: void,
+    AdjustSpeed: i4,
+    LoadSeed: struct { density: f32, seed: usize },
+    Insert: struct { offsets: [][2]i8, x: i32, y: i32 },
+};
+
+const K = 1000;
+const MAX_SUBSCRIBERS: u8 = 2;
+const STATE_TIMES_US = [_]u32{ 1000 * K, 500 * K, 200 * K, 100 * K, 50 * K, 20 * K, 10 * K, 5 * K, 2 * K, 1 * K };
+const INITAL_SPEED: u8 = 6;
+// NOTE: By convention, the public variables below should not be mutated by other modules.
+//       This allows state to be 'broadcast' without copying these variables' values.
+pub var cell_values: [grid_rows * grid_cols]u8 = [_]u8{0} ** (grid_rows * grid_cols); // TODO: make slice!
+pub const grid_rows: u32 = 360; // TODO: make var
+pub const grid_cols: u32 = 640; // TODO: make var
+pub var paused = false;
+pub var quit = false;
+pub var speed: u8 = INITAL_SPEED;
+pub var t: u64 = 0;
+
 var dt_us: i64 = 0;
 var dt_sum: i64 = 0;
 var frames: i64 = 0;
-// NOTE: pre-computing neighbourhoods improved performance and increased memory usage
-//var cell_neighbours: [ROWS * COLS][8]u32 = undefined;
+var rng = std.rand.DefaultPrng.init(0);
+var request_queue: [8]Request = undefined;
+var rq_index: u8 = 0;
+var subscribers: [MAX_SUBSCRIBERS]Subscriber = undefined;
+var sub_index: u8 = 0;
+var tick_us: i64 = @intCast(STATE_TIMES_US[INITAL_SPEED]);
 
-pub fn addClient(cl: client.SdlClient) !void {
-    sdl_client = cl;
-}
+pub fn start(rows: u16, cols: u16, density: f32, seed: u64) !void {
+    // grid_rows = grid_rows;
+    // grid_cols = grid_cols;
+    _ = rows;
+    _ = cols;
+    //cell_values = &[_]u8{0} ** (rows * cols);
+    loadSeed(density, seed);
 
-pub fn run(density: f32, seed: u64) !void {
-    resetCells(density, seed);
-    // state is updated depending on the current game speed
-    // inputs + rendering are performed every frame (to make more responsive)
-    var tick_start = time.microTimestamp();
     while (!quit) {
-        const frame_start = time.microTimestamp();
-        if (!paused and frame_start > tick_start + STATE_TIME_US[speed_index]) {
-            updateState();
-            tick_start = time.microTimestamp();
-            state_tick = state_tick +| 1;
+        const tick_start = time.microTimestamp();
+        if (!paused) {
+            updateGrid();
+            processRequests(false);
         }
-        processRequests();
-        publishState();
-        dt_us = time.microTimestamp() - frame_start;
-        const t_delay_us = if (dt_us < FRAME_TIME_US) @as(u64, @intCast(FRAME_TIME_US - dt_us)) else 0;
+        dt_us = time.microTimestamp() - tick_start;
+        const t_delay_us = if (dt_us < tick_us) @as(u64, @intCast(tick_us - dt_us)) else 0;
         time.sleep(t_delay_us * time.ns_per_us);
         dt_sum += dt_us;
         frames += 1;
@@ -53,10 +81,12 @@ pub fn run(density: f32, seed: u64) !void {
     std.debug.print("rendered {} frames; dt_avg = {:.2} us\n", .{ frames, dt_avg });
 }
 
-// can be used to clear all cells (when density = 0) or load a random seed
-pub fn resetCells(density: f32, seed: u64) void {
+// randomly sets the cell values with P(alive) = density
+// can be used to clear all cells (use density 0)
+pub fn loadSeed(density: f32, seed: u64) void {
+    std.debug.print("loadSeed({}, {}) called at t = {}\n", .{ density, seed, t });
     if (density == 0.0) {
-        cell_values = [_]u8{0} ** (ROWS * COLS);
+        cell_values = ([_]u8{0} ** (grid_rows * grid_cols));
         return;
     }
     const density_factor: f32 = 1.0 / @as(f32, @floatFromInt(math.maxInt(u64)));
@@ -68,12 +98,26 @@ pub fn resetCells(density: f32, seed: u64) void {
     }
 }
 
-// applies environmental rules
-fn updateState() void {
-    var neighbourhood_sums: [ROWS * COLS]u8 = undefined;
-    for (0..ROWS * COLS) |n| {
+pub fn makeRequest(req: Request) bool {
+    if (rq_index >= request_queue.len) return false;
+    request_queue[rq_index] = req;
+    rq_index += 1;
+    // single-player hack that ensures all requests are processed immediately and subscribers are notified
+    processRequests(true);
+    return true;
+}
+
+pub fn subscribe(sub: Subscriber) !void {
+    if (sub_index >= subscribers.len) return error.Oversubscribed;
+    subscribers[sub_index] = sub;
+    sub_index += 1;
+}
+
+// applies environmental rules and updates the cells
+fn updateGrid() void {
+    var neighbourhood_sums: [grid_rows * grid_cols]u8 = undefined;
+    for (0..grid_rows * grid_cols) |n| {
         const adj_indices = getAdjacentIndices(@intCast(n));
-        //const adj_indices = getAdjacentIndices(@intCast(n));
         const neighbourhood_vals = @Vector(8, u8){
             cell_values[adj_indices[0]],
             cell_values[adj_indices[1]],
@@ -87,7 +131,7 @@ fn updateState() void {
         neighbourhood_sums[n] = @reduce(.Add, neighbourhood_vals);
     }
 
-    for (0..ROWS * COLS) |n| {
+    for (0..grid_rows * grid_cols) |n| {
         cell_values[n] = switch (neighbourhood_sums[n]) {
             3 => 1,
             2 => cell_values[n],
@@ -96,38 +140,45 @@ fn updateState() void {
     }
 }
 
-// applies player inputs
-fn processRequests() void {
-    const reqs = sdl_client.getRequests();
-    for (reqs) |req| {
+// processes input requests and publishes state updates to subscribers
+// all subscribers are notified if force_publish is true
+// otherwise subscribers are notified depending on their subscription frequency
+fn processRequests(force_publish: bool) void {
+    for (0..rq_index) |i| {
+        const req = request_queue[i];
         switch (req.action) {
             Action.Quit => quit = true,
             Action.Pause => paused = !paused,
-            Action.Clear => {
-                std.debug.print("reset called after tick {}\n", .{state_tick});
-                resetCells(0, 0);
-                state_tick = 0;
+            Action.LoadSeed => {
+                loadSeed(0, 0);
+                t = 0;
             },
             Action.AdjustSpeed => {
-                const new_index = @as(i8, @intCast(speed_index)) + req.arguments.AdjustSpeed;
-                if (0 <= new_index and new_index < STATE_TIME_US.len) speed_index = @as(u8, @intCast(new_index));
+                const new_index = @as(i8, @intCast(speed)) + req.arguments.AdjustSpeed;
+                if (0 <= new_index and new_index < STATE_TIMES_US.len) {
+                    speed = @as(u8, @intCast(new_index));
+                    tick_us = @intCast(STATE_TIMES_US[speed]);
+                }
             },
             Action.Insert => {
-                const n = req.arguments.Insert.y * COLS + req.arguments.Insert.x;
-                insert(req.arguments.Insert.pattern, n);
+                const n = req.arguments.Insert.y * grid_cols + req.arguments.Insert.x;
+                setCellVals(n, req.arguments.Insert.offsets, 1);
             },
             Action.None => {},
         }
     }
+
+    rq_index = 0;
+    publishState(force_publish);
 }
 
-fn publishState() void {
-    sdl_client.drawState(cell_values[0..], paused, state_tick);
-}
-
-fn insert(p: Pattern, n: i32) void {
-    const offsets = schema.pattern_offsets[@intFromEnum(p)];
-    setCellVals(n, offsets, 1);
+//  publishes state to subscribers
+fn publishState(force: bool) void {
+    for (0..sub_index) |i| {
+        const sub = subscribers[i];
+        if (force or t % sub.frequency == 0)
+            sub.state_handler(sub.ptr, t);
+    }
 }
 
 fn getAdjacentIndices(n: i32) [8]u32 {
@@ -151,8 +202,8 @@ fn setCellVals(n: i32, offsets: []const [2]i8, val: u8) void {
 }
 
 fn wIndex(n: i32, row_offset: i8, col_offset: i8) u32 {
-    const index = n + row_offset * @as(i32, @intCast(COLS)) + col_offset;
-    return @intCast(@mod(index, ROWS * COLS));
+    const index = n + row_offset * @as(i32, @intCast(grid_cols)) + col_offset;
+    return @intCast(@mod(index, grid_rows * grid_cols));
 }
 
 // tests
@@ -164,7 +215,7 @@ test "test index wrapping" {
     const p_001 = wIndex(0, 0, 1);
     try testing.expectEqual(1, p_001);
     const p_010 = wIndex(0, 1, 0);
-    try testing.expectEqual(@as(u32, @intCast(COLS)), p_010);
+    try testing.expectEqual(@as(u32, @intCast(grid_cols)), p_010);
 }
 
 test "test set vals" {
@@ -177,7 +228,7 @@ test "test set vals" {
 
     const adj_indices = getAdjacentIndices(401);
     try testing.expectEqual(adj_indices.len, 8);
-    var adj_sum: u3 = 0;
+    var adj_sum: u8 = 0;
     for (adj_indices) |n|
         adj_sum += cell_values[n];
 
@@ -185,12 +236,13 @@ test "test set vals" {
 }
 
 test "test state update" {
-    resetCells(0, 0);
-    insert(Pattern.cell, 300);
+    const cell_offset = [_][2]i8{[_]i8{ 0, 0 }};
+    loadSeed(0, 0);
+    setCellVals(300, &cell_offset, 1);
     try testing.expectEqual(1, cell_values[300]);
     try testing.expectEqual(0, cell_values[301]);
 
-    updateState();
+    updateGrid();
     try testing.expectEqual(0, cell_values[300]);
     try testing.expectEqual(0, cell_values[301]);
 }

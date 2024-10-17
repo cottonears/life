@@ -4,6 +4,7 @@ const c = @cImport({
 });
 const std = @import("std");
 const schema = @import("schema.zig");
+const game = @import("game.zig");
 const math = std.math;
 const Request = schema.Request;
 const Action = schema.Action;
@@ -21,6 +22,8 @@ const REQUEST_BUFFER_LENGTH = 8;
 const HUD_HEIGHT = 100.0;
 const HUD_MARGIN = 5.0;
 const button_size = HUD_HEIGHT - 2.0 * HUD_MARGIN;
+var grid_rows: u32 = 0;
+var grid_cols: u32 = 0;
 
 const Button = struct {
     label: []const u8,
@@ -65,8 +68,8 @@ pub const SdlClient = struct {
     },
 
     pub fn init(name: []const u8, cell_size: f32) !SdlClient {
-        const width = cell_size * schema.COLS;
-        const height = HUD_HEIGHT + cell_size * schema.ROWS;
+        const width: f32 = cell_size * @as(f32, @floatFromInt(grid_cols));
+        const height: f32 = HUD_HEIGHT + cell_size * @as(f32, @floatFromInt(grid_rows));
         const width_u32 = @as(u32, @intFromFloat(width));
         const height_u32 = @as(u32, @intFromFloat(height));
 
@@ -100,16 +103,17 @@ pub const SdlClient = struct {
         c.SDL_Quit();
     }
 
-    pub fn drawState(self: *SdlClient, cell_values: []const u8, paused: bool, tick: u64) void {
-        // render background + cells
+    pub fn handleStateUpdate(ptr: *anyopaque, tick: u64) void {
+        // TODO: Below pattern taken from https://www.openmymind.net/Zig-Interfaces/
+        //       Try get a better grasp of what is going on here!
+        const self: *SdlClient = @ptrCast(@alignCast(ptr));
         self.setRenderRgba(CELL_DEAD_RGBA);
         _ = c.SDL_RenderClear(self.renderer);
         _ = c.SDL_RenderFillRect(self.renderer, null);
         self.setRenderRgba(CELL_ALIVE_RGBA);
-        for (0..cell_values.len) |n| {
-            if (cell_values[n] == 0) continue;
-            const x = @as(f32, @floatFromInt(n % schema.COLS)) * self.cell_size;
-            const y = @as(f32, @floatFromInt(n / schema.COLS)) * self.cell_size;
+        for (0..game.cell_values.len) |n| {
+            const x = @as(f32, @floatFromInt(n % grid_cols)) * self.cell_size;
+            const y = @as(f32, @floatFromInt(n / grid_cols)) * self.cell_size;
             self.renderRect(x, y, self.cell_size, self.cell_size);
         }
         // render HUD
@@ -123,8 +127,8 @@ pub const SdlClient = struct {
             current_x += button_size + HUD_MARGIN;
         }
 
-        self.renderButton(self.width - 2.0 * (button_size + HUD_MARGIN), button_y, self.pause_button, paused);
-        self.renderButton(self.width - (button_size + HUD_MARGIN), button_y, self.play_button, !paused);
+        self.renderButton(self.width - 2.0 * (button_size + HUD_MARGIN), button_y, self.pause_button, game.paused);
+        self.renderButton(self.width - (button_size + HUD_MARGIN), button_y, self.play_button, !game.paused);
         _ = tick + 1; // TODO: make use of this!;
         _ = c.SDL_RenderPresent(self.renderer);
     }
@@ -140,6 +144,14 @@ pub const SdlClient = struct {
             buff_index += 1;
         }
         return request_buffer[0..buff_index];
+    }
+
+    pub fn getSubscriptionHandler(self: *SdlClient) game.Subscriber {
+        return .{
+            .ptr = self,
+            .frequency = 1,
+            .state_handler = handleStateUpdate,
+        };
     }
 
     fn processEvent(self: *SdlClient, e: c.SDL_Event) Request {

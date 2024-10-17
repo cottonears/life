@@ -22,8 +22,8 @@ pub const Parameters = union(Action) {
 };
 
 // TODO: change pattern into an int and move all the below into main.zig (parse patterns from json!)
-pub const ROWS: u32 = 400;
-pub const COLS: u32 = 720;
+//pub const ROWS: u32 = 400;
+//pub const COLS: u32 = 720;
 
 pub const Pattern = enum(u8) {
     cell, // 0
