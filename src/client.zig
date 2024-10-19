@@ -5,12 +5,13 @@ const c = @cImport({
 const std = @import("std");
 const schema = @import("schema.zig");
 const game = @import("game.zig");
+
 const math = std.math;
+const State = schema.State;
 const Request = schema.Request;
 const Action = schema.Action;
 const Parameters = schema.Parameters;
-const Pattern = schema.Pattern;
-const pattern_offsets = schema.pattern_offsets;
+const pattern_offsets = schema.pattern_offsets; // TODO; load these from a config file instead!
 const HUD_BAR_RGBA = [_]u8{ 0x20, 0x21, 0x20, 0xFF };
 const DEFAULT_ACTIVE_RGBA = [_]u8{ 0xE0, 0xC0, 0x00, 0xFF };
 const DEFAULT_INACTIVE_RGBA = [_]u8{ 0x40, 0x40, 0x40, 0xA0 };
@@ -32,6 +33,34 @@ const Button = struct {
     inactive_rgba: [4]u8 = DEFAULT_INACTIVE_RGBA,
 };
 
+const pause_icon: []const [2]i8 = &.{
+    [2]i8{ 0, 0 },
+    [2]i8{ 0, 2 },
+    [2]i8{ 1, 0 },
+    [2]i8{ 1, 2 },
+    [2]i8{ 2, 0 },
+    [2]i8{ 2, 2 },
+};
+const play_icon: []const [2]i8 = &.{
+    [2]i8{ 0, 0 },
+    [2]i8{ 0, 1 },
+    [2]i8{ 1, 0 },
+    [2]i8{ 1, 1 },
+    [2]i8{ 1, 2 },
+    [2]i8{ 1, 3 },
+    [2]i8{ 2, 0 },
+    [2]i8{ 2, 1 },
+    [2]i8{ 2, 2 },
+    [2]i8{ 2, 3 },
+    [2]i8{ 2, 4 },
+    [2]i8{ 3, 0 },
+    [2]i8{ 3, 1 },
+    [2]i8{ 3, 2 },
+    [2]i8{ 3, 3 },
+    [2]i8{ 4, 0 },
+    [2]i8{ 4, 1 },
+};
+
 pub const SdlClient = struct {
     window: *c.SDL_Window,
     renderer: *c.SDL_Renderer,
@@ -41,30 +70,30 @@ pub const SdlClient = struct {
     height_u32: u32,
     cell_size: f32,
     cell_scale_factor: f32,
-    active_pattern: Pattern = Pattern.cell,
+    active_pattern: u8 = 0,
     mouse_x: f32 = 0.0,
     mouse_y: f32 = 0.0,
     pattern_buttons: [10]Button = [10]Button{
-        Button{ .label = "block", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.block)] },
-        Button{ .label = "toad", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.toad)] },
-        Button{ .label = "pulsar", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.pulsar)] },
-        Button{ .label = "monogram", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.monogram)] },
-        Button{ .label = "pentadecathlon", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.pentadecathlon)] },
-        Button{ .label = "glider", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.glider)] },
-        Button{ .label = "mid-weight spaceship", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.mwss)] },
-        Button{ .label = "weekender", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.weekender)] },
-        Button{ .label = "unknown", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.unknown)] },
-        Button{ .label = "cell", .icon_offsets = pattern_offsets[@intFromEnum(Pattern.cell)] },
+        Button{ .label = "block", .icon_offsets = pattern_offsets[1] },
+        Button{ .label = "toad", .icon_offsets = pattern_offsets[2] },
+        Button{ .label = "pulsar", .icon_offsets = pattern_offsets[3] },
+        Button{ .label = "monogram", .icon_offsets = pattern_offsets[4] },
+        Button{ .label = "pentadecathlon", .icon_offsets = pattern_offsets[5] },
+        Button{ .label = "glider", .icon_offsets = pattern_offsets[6] },
+        Button{ .label = "mid-weight spaceship", .icon_offsets = pattern_offsets[7] },
+        Button{ .label = "weekender", .icon_offsets = pattern_offsets[8] },
+        Button{ .label = "unknown", .icon_offsets = pattern_offsets[9] },
+        Button{ .label = "cell", .icon_offsets = pattern_offsets[0] },
     },
     pause_button: Button = Button{
         .label = "pause",
         .active_rgba = PAUSE_ACTIVE_RGBA,
-        .icon_offsets = schema.pattern_offsets[@intFromEnum(Pattern.block)], // TODO: fix this!
+        .icon_offsets = pause_icon,
     },
     play_button: Button = Button{
         .label = "play",
         .active_rgba = PLAY_ACTIVE_RGBA,
-        .icon_offsets = schema.pattern_offsets[@intFromEnum(Pattern.toad)], // TODO: fix this!
+        .icon_offsets = play_icon,
     },
 
     pub fn init(name: []const u8, cell_size: f32) !SdlClient {
@@ -103,7 +132,7 @@ pub const SdlClient = struct {
         c.SDL_Quit();
     }
 
-    pub fn handleStateUpdate(ptr: *anyopaque, tick: u64) void {
+    pub fn handleStateUpdate(ptr: *anyopaque, state: State) void {
         // TODO: Below pattern taken from https://www.openmymind.net/Zig-Interfaces/
         //       Try get a better grasp of what is going on here!
         const self: *SdlClient = @ptrCast(@alignCast(ptr));
@@ -111,7 +140,7 @@ pub const SdlClient = struct {
         _ = c.SDL_RenderClear(self.renderer);
         _ = c.SDL_RenderFillRect(self.renderer, null);
         self.setRenderRgba(CELL_ALIVE_RGBA);
-        for (0..game.cell_values.len) |n| {
+        for (0..state.cell_values.len) |n| {
             const x = @as(f32, @floatFromInt(n % grid_cols)) * self.cell_size;
             const y = @as(f32, @floatFromInt(n / grid_cols)) * self.cell_size;
             self.renderRect(x, y, self.cell_size, self.cell_size);
@@ -122,15 +151,24 @@ pub const SdlClient = struct {
         self.renderRect(0.0, button_y - HUD_MARGIN, self.width, HUD_HEIGHT);
         var current_x: f32 = HUD_MARGIN;
         for (self.pattern_buttons, 0..) |b, i| {
-            const b_active = (i + 1) % 10 == @intFromEnum(self.active_pattern);
+            const b_active = (i + 1) % 10 == self.active_pattern;
             self.renderButton(current_x, button_y, b, b_active);
             current_x += button_size + HUD_MARGIN;
         }
 
-        self.renderButton(self.width - 2.0 * (button_size + HUD_MARGIN), button_y, self.pause_button, game.paused);
-        self.renderButton(self.width - (button_size + HUD_MARGIN), button_y, self.play_button, !game.paused);
-        _ = tick + 1; // TODO: make use of this!;
+        const pause_x = self.width - 2.0 * (button_size + HUD_MARGIN);
+        const play_x = self.width - (button_size + HUD_MARGIN);
+        self.renderButton(pause_x, button_y, self.pause_button, state.paused);
+        self.renderButton(play_x, button_y, self.play_button, !state.paused);
         _ = c.SDL_RenderPresent(self.renderer);
+    }
+
+    pub fn getSubscription(self: *SdlClient) schema.Subscription {
+        return .{
+            .ptr = self,
+            .frequency = 1,
+            .state_handler = handleStateUpdate,
+        };
     }
 
     pub fn getRequests(self: *SdlClient) []Request {
@@ -146,14 +184,6 @@ pub const SdlClient = struct {
         return request_buffer[0..buff_index];
     }
 
-    pub fn getSubscriptionHandler(self: *SdlClient) game.Subscriber {
-        return .{
-            .ptr = self,
-            .frequency = 1,
-            .state_handler = handleStateUpdate,
-        };
-    }
-
     fn processEvent(self: *SdlClient, e: c.SDL_Event) Request {
         var action = Action.None;
         var args: Parameters = undefined;
@@ -161,16 +191,16 @@ pub const SdlClient = struct {
             action = Action.Quit
         else if (e.type == c.SDL_EVENT_KEY_DOWN) {
             switch (e.key.key) {
-                c.SDLK_0 => self.active_pattern = Pattern.cell,
-                c.SDLK_1 => self.active_pattern = Pattern.block,
-                c.SDLK_2 => self.active_pattern = Pattern.toad,
-                c.SDLK_3 => self.active_pattern = Pattern.pulsar,
-                c.SDLK_4 => self.active_pattern = Pattern.monogram,
-                c.SDLK_5 => self.active_pattern = Pattern.pentadecathlon,
-                c.SDLK_6 => self.active_pattern = Pattern.glider,
-                c.SDLK_7 => self.active_pattern = Pattern.mwss,
-                c.SDLK_8 => self.active_pattern = Pattern.weekender,
-                c.SDLK_9 => self.active_pattern = Pattern.unknown,
+                c.SDLK_0 => self.active_pattern = 0,
+                c.SDLK_1 => self.active_pattern = 1,
+                c.SDLK_2 => self.active_pattern = 2,
+                c.SDLK_3 => self.active_pattern = 3,
+                c.SDLK_4 => self.active_pattern = 4,
+                c.SDLK_5 => self.active_pattern = 5,
+                c.SDLK_6 => self.active_pattern = 6,
+                c.SDLK_7 => self.active_pattern = 7,
+                c.SDLK_8 => self.active_pattern = 8,
+                c.SDLK_9 => self.active_pattern = 9,
                 c.SDLK_SPACE => action = Action.Pause,
                 c.SDLK_ESCAPE => action = Action.Quit,
                 c.SDLK_BACKSPACE => action = Action.Clear,

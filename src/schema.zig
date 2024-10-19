@@ -1,14 +1,26 @@
+pub const State = struct {
+    cell_values: []u8,
+    paused: bool = true,
+    t: u64 = 0,
+};
+
 pub const Request = struct {
     action: Action,
     arguments: Parameters,
+};
+
+pub const Subscription = struct {
+    ptr: *anyopaque,
+    frequency: u8 = 1,
+    state_handler: *const fn (ptr: *anyopaque, state: State) void,
 };
 
 pub const Action = enum(u8) {
     None,
     Pause,
     Quit,
-    Clear,
     AdjustSpeed,
+    LoadSeed,
     Insert,
 };
 
@@ -16,27 +28,9 @@ pub const Parameters = union(Action) {
     None: void,
     Pause: void,
     Quit: void,
-    Clear: void,
     AdjustSpeed: i4,
-    Insert: struct { pattern: Pattern, x: i32, y: i32 },
-};
-
-// TODO: change pattern into an int and move all the below into main.zig (parse patterns from json!)
-//pub const ROWS: u32 = 400;
-//pub const COLS: u32 = 720;
-
-pub const Pattern = enum(u8) {
-    cell, // 0
-    block, // 1
-    toad, // 2
-    pulsar, // 3
-    monogram, // 4
-    pentadecathlon, // 5
-    glider, // 6
-    mwss, // 7
-
-    weekender, // 8
-    unknown, // 9
+    LoadSeed: struct { density: f32, seed: usize },
+    Insert: struct { offsets: []const [2]i8, x: i32, y: i32 },
 };
 
 pub const pattern_offsets: [10][]const [2]i8 = .{
@@ -229,10 +223,9 @@ test "request test" {
 
     const req2 = Request{
         .action = Action.Insert,
-        .arguments = Parameters{ .Insert = .{ .pattern = Pattern.glider, .x = 100, .y = 200 } },
+        .arguments = Parameters{ .Insert = .{ .offsets = pattern_offsets[6], .x = 100, .y = 200 } },
     };
     try testing.expectEqual(Action.Insert, req2.action);
-    try testing.expectEqual(Pattern.glider, req2.arguments.Insert.pattern);
     try testing.expectEqual(100, req2.arguments.Insert.x);
     try testing.expectEqual(200, req2.arguments.Insert.y);
     std.debug.print("req2 = {}({})\n", .{ req2.action, req2.arguments });
