@@ -7,12 +7,7 @@ pub const State = struct {
 pub const Request = struct {
     action: Action,
     arguments: Parameters,
-};
-
-pub const Subscription = struct {
-    ptr: *anyopaque,
-    frequency: u8 = 1,
-    state_handler: *const fn (ptr: *anyopaque, state: State) void,
+    player_id: u16 = 0,
 };
 
 pub const Action = enum(u8) {
@@ -28,9 +23,9 @@ pub const Parameters = union(Action) {
     None: void,
     Pause: void,
     Quit: void,
-    AdjustSpeed: i4,
+    AdjustSpeed: i8,
     LoadSeed: struct { density: f32, seed: usize },
-    Insert: struct { offsets: []const [2]i8, x: i32, y: i32 },
+    Insert: struct { x: i32, y: i32, offsets: []const [2]i8 },
 };
 
 pub const pattern_offsets: [10][]const [2]i8 = .{
@@ -206,8 +201,47 @@ pub const pattern_offsets: [10][]const [2]i8 = .{
         [2]i8{ 10, 9 },
         [2]i8{ 10, 10 },
     },
-    // unknown
-    &.{},
+    // gosper gun
+    &.{
+        [2]i8{ 0, 24 },
+        [2]i8{ 1, 22 },
+        [2]i8{ 1, 24 },
+        [2]i8{ 1, 24 },
+        [2]i8{ 1, 24 },
+        [2]i8{ 2, 12 },
+        [2]i8{ 2, 13 },
+        [2]i8{ 2, 20 },
+        [2]i8{ 2, 21 },
+        [2]i8{ 2, 34 },
+        [2]i8{ 2, 35 },
+        [2]i8{ 3, 11 },
+        [2]i8{ 3, 15 },
+        [2]i8{ 3, 20 },
+        [2]i8{ 3, 21 },
+        [2]i8{ 3, 34 },
+        [2]i8{ 3, 35 },
+        [2]i8{ 4, 0 },
+        [2]i8{ 4, 1 },
+        [2]i8{ 4, 10 },
+        [2]i8{ 4, 16 },
+        [2]i8{ 4, 20 },
+        [2]i8{ 4, 21 },
+        [2]i8{ 5, 0 },
+        [2]i8{ 5, 1 },
+        [2]i8{ 5, 10 },
+        [2]i8{ 5, 14 },
+        [2]i8{ 5, 16 },
+        [2]i8{ 5, 17 },
+        [2]i8{ 5, 22 },
+        [2]i8{ 5, 24 },
+        [2]i8{ 6, 10 },
+        [2]i8{ 6, 16 },
+        [2]i8{ 6, 24 },
+        [2]i8{ 7, 11 },
+        [2]i8{ 7, 15 },
+        [2]i8{ 8, 12 },
+        [2]i8{ 8, 13 },
+    },
 };
 
 const std = @import("std");

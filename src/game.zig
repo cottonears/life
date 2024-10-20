@@ -1,6 +1,5 @@
 const std = @import("std");
 const schema = @import("schema.zig");
-
 const math = std.math;
 const rand = std.rand;
 const time = std.time;
@@ -8,95 +7,54 @@ const Action = schema.Action;
 const Request = schema.Request;
 const Parameters = schema.Parameters;
 const State = schema.State;
-const Subscription = schema.Subscription;
-const K = 1000;
-const MAX_SUBSCRIBERS: u8 = 2;
-const STATE_TIMES_US = [_]u32{ 1000 * K, 500 * K, 200 * K, 100 * K, 50 * K, 20 * K, 10 * K, 5 * K, 2 * K, 1 * K };
 
-var state: State = undefined;
-var grid_rows: i32 = 360;
-var grid_cols: i32 = 640;
-var initalised = false;
-var quit = false;
-var speed: u8 = 6;
-var dt_us: i64 = 0;
-var dt_sum: i64 = 0;
-var frames: i64 = 0;
-var rng = std.rand.DefaultPrng.init(0);
-var request_queue: [8]Request = undefined;
-var rq_index: u8 = 0;
-var subscribers: [MAX_SUBSCRIBERS]Subscription = undefined;
-var sub_index: u8 = 0;
-var tick_us: i64 = 0;
+pub var state: State = undefined;
+pub var grid_rows: i32 = 0;
+pub var grid_cols: i32 = 0;
+var num_cells: u64 = undefined;
+var rng: rand.Xoshiro256 = undefined;
 var sums: []u8 = undefined;
 
-pub fn init(allocator: std.mem.Allocator, rows: u16, cols: u16, density: f32, seed: u64) !void {
+pub fn init(allocator: std.mem.Allocator, rows: u16, cols: u16) !void {
     if (rows == 0 or cols == 0) return error.InvalidGridDimensions;
-
-    std.debug.print("about to init state\n", .{});
-    state = State{ .cell_values = try allocator.alloc(u8, 1 * rows * cols) };
-    sums = try allocator.alloc(u8, 1 * rows * cols);
     grid_rows = rows;
     grid_cols = cols;
-
-    std.debug.print("about to load seed state\n", .{});
-    loadSeed(density, seed);
-    tick_us = STATE_TIMES_US[speed];
+    num_cells = @intCast(grid_rows * grid_cols);
+    rng = rand.DefaultPrng.init(0);
+    state = State{ .cell_values = try allocator.alloc(u8, num_cells) };
+    sums = try allocator.alloc(u8, num_cells);
 }
 
-pub fn run() void {
-    std.debug.print("about to start game\n", .{});
-    while (!quit) {
-        const tick_start = time.microTimestamp();
-        if (!state.paused) {
-            updateGrid();
-            processRequests(false);
-        }
-        dt_us = time.microTimestamp() - tick_start;
-        const t_delay_us = if (dt_us < tick_us) @as(u64, @intCast(tick_us - dt_us)) else 0;
-        time.sleep(t_delay_us * time.ns_per_us);
-        dt_sum += dt_us;
-        frames += 1;
-    }
-    const dt_avg: f32 = @as(f32, @floatFromInt(dt_sum)) / @as(f32, @floatFromInt(frames));
-    std.debug.print("rendered {} frames; dt_avg = {:.2} us\n", .{ frames, dt_avg });
-}
-
-pub fn deinit(alloc: std.mem.Allocator) !void {
+pub fn deinit(alloc: std.mem.Allocator) void {
     alloc.free(state.cell_values);
+    alloc.free(sums);
 }
 
 // randomly sets the cell values with P(alive) = density
-// can be used to clear all cells (use density 0)
 pub fn loadSeed(density: f32, seed: u64) void {
-    std.debug.print("loadSeed({}, {}) called at t = {}\n", .{ density, seed, state.t });
+    std.debug.print("loadSeed({d:.3}, {}) called at t = {}\n", .{ density, seed, state.t });
     const density_factor: f32 = 1.0 / @as(f32, @floatFromInt(math.maxInt(u64)));
     const clamped_density = math.clamp(density, 0.0, 1.0);
     rng.seed(seed);
     for (0..state.cell_values.len) |n| {
         const x = density_factor * @as(f32, @floatFromInt(rng.next()));
-        state.cell_values[n] = if (x > clamped_density) 1 else 0;
+        state.cell_values[n] = if (x < clamped_density) 1 else 0;
     }
 }
 
-pub fn makeRequest(req: Request) bool {
-    if (rq_index >= request_queue.len) return false;
-    request_queue[rq_index] = req;
-    rq_index += 1;
-    // single-player hack that ensures all requests are processed immediately and subscribers are notified
-    processRequests(true);
-    return true;
+pub fn insert(x: i32, y: i32, offsets: []const [2]i8) void {
+    const n: i32 = y * grid_cols + x;
+    setCellVals(n, offsets, 1);
 }
 
-pub fn subscribe(sub: Subscription) !void {
-    if (sub_index >= subscribers.len) return error.Oversubscribed;
-    subscribers[sub_index] = sub;
-    sub_index += 1;
+pub fn togglePause() void {
+    state.paused = !state.paused;
 }
 
 // applies environmental rules and updates the cells
-fn updateGrid() void {
-    for (0..state.cell_values.len) |n| {
+pub fn updateGrid() void {
+    if (state.paused) return;
+    for (0..num_cells) |n| {
         const adj_indices = getAdjacentIndices(@intCast(n));
         const neighbourhood_vals = @Vector(8, u8){
             state.cell_values[adj_indices[0]],
@@ -118,44 +76,7 @@ fn updateGrid() void {
             else => 0,
         };
     }
-}
-
-// processes input requests and publishes state updates to subscribers
-// all subscribers are notified if force_publish is true
-// otherwise subscribers are notified depending on their subscription frequency
-fn processRequests(force_publish: bool) void {
-    for (0..rq_index) |i| {
-        const req = request_queue[i];
-        switch (req.action) {
-            Action.Quit => quit = true,
-            Action.Pause => state.paused = !state.paused,
-            Action.LoadSeed => loadSeed(0, 0),
-            Action.AdjustSpeed => {
-                const new_index = @as(i8, @intCast(speed)) + req.arguments.AdjustSpeed;
-                if (0 <= new_index and new_index < STATE_TIMES_US.len) {
-                    speed = @as(u8, @intCast(new_index));
-                    tick_us = @intCast(STATE_TIMES_US[speed]);
-                }
-            },
-            Action.Insert => {
-                const n = req.arguments.Insert.y * grid_cols + req.arguments.Insert.x;
-                setCellVals(n, req.arguments.Insert.offsets, 1);
-            },
-            Action.None => {},
-        }
-    }
-
-    rq_index = 0;
-    publishState(force_publish);
-}
-
-//  publishes state to subscribers
-fn publishState(force: bool) void {
-    for (0..sub_index) |i| {
-        const sub = subscribers[i];
-        if (force or state.t % sub.frequency == 0)
-            sub.state_handler(sub.ptr, state);
-    }
+    state.t += 1;
 }
 
 fn getAdjacentIndices(n: i32) [8]u32 {
@@ -197,32 +118,71 @@ test "test index wrapping" {
     try testing.expectEqual(@as(u32, @intCast(grid_cols)), p_010);
 }
 
-test "test set vals" {
-    try init(testing.allocator, 100, 100, 0, 0);
-    const offsets = [_][2]i8{
-        [_]i8{ -1, -1 },
-        [_]i8{ -1, 0 },
-        [_]i8{ 0, -1 },
-    };
-    setCellVals(401, offsets[0..], 1);
-
-    const adj_indices = getAdjacentIndices(401);
-    try testing.expectEqual(adj_indices.len, 8);
-    var adj_sum: u8 = 0;
-    for (adj_indices) |n|
-        adj_sum += state.cell_values[n];
-
-    try testing.expectEqual(3, adj_sum);
+test "test load" {
+    try init(testing.allocator, 100, 100);
+    defer deinit(testing.allocator);
+    // expect a sum of zero after initialising with density = 0
+    loadSeed(0, 0);
+    var sum_zero: u32 = 0;
+    for (state.cell_values) |v| sum_zero += v;
+    try testing.expectEqual(0, sum_zero);
+    // expect a sum of 10k (rows * cols) after loading with density 1
+    loadSeed(1, 0);
+    var sum_one: u32 = 0;
+    for (state.cell_values) |v| sum_one += v;
+    try testing.expectEqual(10000, sum_one);
+    // expect a sum of roughly 5k after loading withing density 0.5
+    loadSeed(0.5, 58312);
+    var sum_half: f32 = 0;
+    for (state.cell_values) |v| sum_half += @floatFromInt(v);
+    try testing.expectApproxEqAbs(5000.0, sum_half, 100);
 }
 
-// test "test state update" {
-//     const cell_offset = [_][2]i8{[_]i8{ 0, 0 }};
-//     loadSeed(0, 0);
-//     setCellVals(300, &cell_offset, 1);
-//     try testing.expectEqual(1, state.cell_values[300]);
-//     try testing.expectEqual(0, state.cell_values[301]);
+test "test set vals" {
+    try init(testing.allocator, 10, 10);
+    defer deinit(testing.allocator);
+    loadSeed(0, 0);
+    // check 8 adjacent indices are returned
+    const adj_indices = getAdjacentIndices(42);
+    try testing.expectEqual(adj_indices.len, 8);
+    // check they sum to zero
+    var init_sum: u8 = 0;
+    for (adj_indices) |n| init_sum += state.cell_values[n];
+    try testing.expectEqual(0, init_sum);
+    // insert some 1s & check the values are adjusted as expected
+    const offsets = [_][2]i8{ [_]i8{ -1, -1 }, [_]i8{ -1, 0 }, [_]i8{ 0, -1 } };
+    setCellVals(42, offsets[0..], 1);
+    var final_sum: u8 = 0;
+    for (adj_indices) |n| final_sum += state.cell_values[n];
+    try testing.expectEqual(3, final_sum);
+}
 
-//     updateGrid();
-//     try testing.expectEqual(0, state.cell_values[300]);
-//     try testing.expectEqual(0, state.cell_values[301]);
-// }
+test "test state update" {
+    try init(testing.allocator, 3, 3);
+    defer deinit(testing.allocator);
+
+    loadSeed(0, 0);
+    const cell_offset = [_][2]i8{[_]i8{ 0, 0 }};
+    setCellVals(4, &cell_offset, 1);
+    try testing.expectEqual(0, state.cell_values[3]);
+    try testing.expectEqual(1, state.cell_values[4]);
+    try testing.expectEqual(0, state.cell_values[5]);
+
+    std.debug.print("values[0] = {any}\n", .{state.cell_values});
+    std.debug.print("sums[0] = {any}\n", .{sums});
+    updateGrid();
+    std.debug.print("values[1] = {any}\n", .{state.cell_values});
+    std.debug.print("sums[1] = {any}\n", .{sums});
+
+    try testing.expectEqual(0, state.cell_values[3]);
+    try testing.expectEqual(0, state.cell_values[4]);
+    try testing.expectEqual(0, state.cell_values[5]);
+
+    try testing.expectEqual(1, sums[3]);
+    try testing.expectEqual(0, sums[4]);
+    try testing.expectEqual(1, sums[5]);
+
+    updateGrid();
+    std.debug.print("values[2] = {any}\n", .{state.cell_values});
+    std.debug.print("sums[2] = {any}\n", .{sums});
+}

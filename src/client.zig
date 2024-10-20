@@ -4,8 +4,6 @@ const c = @cImport({
 });
 const std = @import("std");
 const schema = @import("schema.zig");
-const game = @import("game.zig");
-
 const math = std.math;
 const State = schema.State;
 const Request = schema.Request;
@@ -19,8 +17,8 @@ const PLAY_ACTIVE_RGBA = [_]u8{ 0x20, 0xFF, 0x20, 0xFF };
 const PAUSE_ACTIVE_RGBA = [_]u8{ 0xFF, 0x20, 0x20, 0xFF };
 const CELL_ALIVE_RGBA = [_]u8{ 0xA0, 0xB5, 0xD0, 0xFF };
 const CELL_DEAD_RGBA = [_]u8{ 0x05, 0x05, 0x05, 0xFF };
-const REQUEST_BUFFER_LENGTH = 8;
-const HUD_HEIGHT = 100.0;
+const REQUEST_BUFFER_LENGTH = 16;
+const HUD_HEIGHT = 80.0;
 const HUD_MARGIN = 5.0;
 const button_size = HUD_HEIGHT - 2.0 * HUD_MARGIN;
 var grid_rows: u32 = 0;
@@ -82,7 +80,7 @@ pub const SdlClient = struct {
         Button{ .label = "glider", .icon_offsets = pattern_offsets[6] },
         Button{ .label = "mid-weight spaceship", .icon_offsets = pattern_offsets[7] },
         Button{ .label = "weekender", .icon_offsets = pattern_offsets[8] },
-        Button{ .label = "unknown", .icon_offsets = pattern_offsets[9] },
+        Button{ .label = "gosper gun", .icon_offsets = pattern_offsets[9] },
         Button{ .label = "cell", .icon_offsets = pattern_offsets[0] },
     },
     pause_button: Button = Button{
@@ -96,7 +94,9 @@ pub const SdlClient = struct {
         .icon_offsets = play_icon,
     },
 
-    pub fn init(name: []const u8, cell_size: f32) !SdlClient {
+    pub fn init(name: []const u8, rows: u32, cols: u32, cell_size: f32) !SdlClient {
+        grid_rows = rows;
+        grid_cols = cols;
         const width: f32 = cell_size * @as(f32, @floatFromInt(grid_cols));
         const height: f32 = HUD_HEIGHT + cell_size * @as(f32, @floatFromInt(grid_rows));
         const width_u32 = @as(u32, @intFromFloat(width));
@@ -132,15 +132,13 @@ pub const SdlClient = struct {
         c.SDL_Quit();
     }
 
-    pub fn handleStateUpdate(ptr: *anyopaque, state: State) void {
-        // TODO: Below pattern taken from https://www.openmymind.net/Zig-Interfaces/
-        //       Try get a better grasp of what is going on here!
-        const self: *SdlClient = @ptrCast(@alignCast(ptr));
+    pub fn handleStateUpdate(self: *SdlClient, state: State) void {
         self.setRenderRgba(CELL_DEAD_RGBA);
         _ = c.SDL_RenderClear(self.renderer);
         _ = c.SDL_RenderFillRect(self.renderer, null);
         self.setRenderRgba(CELL_ALIVE_RGBA);
         for (0..state.cell_values.len) |n| {
+            if (state.cell_values[n] == 0) continue;
             const x = @as(f32, @floatFromInt(n % grid_cols)) * self.cell_size;
             const y = @as(f32, @floatFromInt(n / grid_cols)) * self.cell_size;
             self.renderRect(x, y, self.cell_size, self.cell_size);
@@ -155,7 +153,6 @@ pub const SdlClient = struct {
             self.renderButton(current_x, button_y, b, b_active);
             current_x += button_size + HUD_MARGIN;
         }
-
         const pause_x = self.width - 2.0 * (button_size + HUD_MARGIN);
         const play_x = self.width - (button_size + HUD_MARGIN);
         self.renderButton(pause_x, button_y, self.pause_button, state.paused);
@@ -163,23 +160,16 @@ pub const SdlClient = struct {
         _ = c.SDL_RenderPresent(self.renderer);
     }
 
-    pub fn getSubscription(self: *SdlClient) schema.Subscription {
-        return .{
-            .ptr = self,
-            .frequency = 1,
-            .state_handler = handleStateUpdate,
-        };
-    }
-
     pub fn getRequests(self: *SdlClient) []Request {
         var request_buffer: [REQUEST_BUFFER_LENGTH]Request = undefined;
-        var buff_index: u8 = 0;
+        var buff_index: u4 = 0;
         var e: c.SDL_Event = undefined;
-        while (c.SDL_PollEvent(&e) and buff_index < REQUEST_BUFFER_LENGTH) {
+        while (c.SDL_PollEvent(&e)) {
             const req = self.processEvent(e);
-            if (req.action == Action.None) continue;
-            request_buffer[buff_index] = req;
-            buff_index += 1;
+            if (req.action != Action.None and buff_index < REQUEST_BUFFER_LENGTH) {
+                request_buffer[buff_index] = req;
+                buff_index += 1;
+            }
         }
         return request_buffer[0..buff_index];
     }
@@ -203,7 +193,10 @@ pub const SdlClient = struct {
                 c.SDLK_9 => self.active_pattern = 9,
                 c.SDLK_SPACE => action = Action.Pause,
                 c.SDLK_ESCAPE => action = Action.Quit,
-                c.SDLK_BACKSPACE => action = Action.Clear,
+                c.SDLK_BACKSPACE => {
+                    action = Action.LoadSeed;
+                    args = Parameters{ .LoadSeed = .{ .density = 0.0, .seed = 0 } };
+                },
                 c.SDLK_MINUS => {
                     action = Action.AdjustSpeed;
                     args = Parameters{ .AdjustSpeed = -1 };
@@ -222,9 +215,9 @@ pub const SdlClient = struct {
                 // TODO: centre the pattern on mouse and find the best place to put it!
                 action = Action.Insert;
                 args = Parameters{ .Insert = .{
-                    .pattern = self.active_pattern,
                     .x = @intFromFloat(self.mouse_x * self.cell_scale_factor),
                     .y = @intFromFloat(self.mouse_y * self.cell_scale_factor),
+                    .offsets = pattern_offsets[self.active_pattern],
                 } };
             }
         }
@@ -233,6 +226,7 @@ pub const SdlClient = struct {
     }
 
     fn renderButton(self: *SdlClient, x: f32, y: f32, b: Button, active: bool) void {
+        // TODO: tidy up this mess!
         const rgba = if (active) b.active_rgba else b.inactive_rgba;
         self.setRenderRgba(rgba);
         self.renderRect(x, y, button_size, button_size);
@@ -251,10 +245,9 @@ pub const SdlClient = struct {
         const icon_width = 1.0 + max_x - min_x;
         const icon_height = 1.0 + max_y - min_y;
         const icon_size = @max(icon_width, icon_height);
-        const scale_factor = button_size / (2 + icon_size);
-        const x_offset = x + 0.1 * button_size + 0.5 * scale_factor * (icon_size - icon_width);
-        const y_offset = y + 0.1 * button_size + 0.5 * scale_factor * (icon_size - icon_height);
-
+        const scale_factor = button_size / (4 + icon_size);
+        const x_offset = x + 0.5 * (HUD_HEIGHT - scale_factor * (icon_width + 1));
+        const y_offset = y + 0.5 * (HUD_HEIGHT - scale_factor * (icon_height + 1));
         const icon_rgba = [_]u8{ 0, 0, 0, 255 };
         self.setRenderRgba(icon_rgba);
         for (b.icon_offsets) |offsets| {
